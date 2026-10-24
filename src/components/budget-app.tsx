@@ -11,7 +11,10 @@ import {
 import { ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FieldLabel, SelectInput, TextInput } from "@/components/ui/field";
+import { PlanPanel } from "@/components/plan-panel";
 import {
+  ENTRY_KINDS,
+  KIND_LABEL,
   categoriesFor,
   centsToInput,
   currentMonth,
@@ -20,7 +23,9 @@ import {
   formatMonth,
   formatSigned,
   monthKey,
+  netSpent,
   parseDollars,
+  remainingEffect,
   shiftMonth,
   spendingByCategory,
   sumKind,
@@ -28,6 +33,7 @@ import {
   useBudget,
   type Kind,
   type Transaction,
+  type TransferDirection,
 } from "@/lib/budget";
 import { cn } from "@/lib/utils";
 
@@ -37,10 +43,18 @@ type Draft = {
   category: string;
   note: string;
   date: string;
+  direction: TransferDirection;
 };
 
 function emptyDraft(date: string): Draft {
-  return { kind: "expense", amount: "", category: "Groceries", note: "", date };
+  return {
+    kind: "expense",
+    amount: "",
+    category: "Groceries",
+    note: "",
+    date,
+    direction: "out",
+  };
 }
 
 function draftFromTransaction(row: Transaction): Draft {
@@ -50,6 +64,7 @@ function draftFromTransaction(row: Transaction): Draft {
     category: row.category,
     note: row.note,
     date: row.date,
+    direction: row.direction === "in" ? "in" : "out",
   };
 }
 
@@ -60,7 +75,24 @@ function normalizeDraft(draft: Draft): Omit<Transaction, "id"> | null {
   const options = categoriesFor(draft.kind);
   const category = options.includes(draft.category) ? draft.category : options[0];
   const note = draft.note.trim().slice(0, 80);
-  return { kind: draft.kind, amountCents, category, note, date: draft.date };
+  const next: Omit<Transaction, "id"> = {
+    kind: draft.kind,
+    amountCents,
+    category,
+    note,
+    date: draft.date,
+  };
+  if (draft.kind === "transfer") next.direction = draft.direction === "in" ? "in" : "out";
+  return next;
+}
+
+function entryDetail(row: Transaction): string {
+  if (row.kind === "transfer") {
+    const way = row.direction === "in" ? "In" : "Out";
+    return `${way} · ${row.category}`;
+  }
+  if (row.note) return row.category;
+  return KIND_LABEL[row.kind];
 }
 
 export function BudgetApp() {
@@ -79,6 +111,7 @@ function Ledger() {
   const removeTransaction = useBudget((state) => state.removeTransaction);
   const removeMonth = useBudget((state) => state.removeMonth);
   const setGoal = useBudget((state) => state.setGoal);
+  const cash = useBudget((state) => state.cash);
 
   const [month, setMonth] = useState(currentMonth);
   const [draft, setDraft] = useState<Draft>(() => emptyDraft(todayISO()));
@@ -95,7 +128,7 @@ function Ledger() {
     [transactions, month],
   );
   const income = sumKind(monthRows, "income");
-  const spent = sumKind(monthRows, "expense");
+  const spent = netSpent(monthRows);
   const remaining = income - spent;
   const slices = useMemo(() => spendingByCategory(monthRows), [monthRows]);
   const ordered = useMemo(() => {
@@ -110,8 +143,7 @@ function Ledger() {
   const projected =
     draftCents == null
       ? null
-      : remaining +
-        (draftInView ? (draft.kind === "income" ? draftCents : -draftCents) : 0);
+      : remaining + (draftInView ? remainingEffect(draft.kind, draftCents) : 0);
 
   function changeKind(kind: Kind) {
     const options = categoriesFor(kind);
@@ -206,7 +238,9 @@ function Ledger() {
             This month
           </Button>
         </div>
-      ) : null}
+      ) : (
+        <PlanPanel />
+      )}
 
       <section className="rounded-3xl bg-surface p-6">
         <div className="grid gap-8 lg:grid-cols-2 lg:gap-12">
@@ -215,7 +249,8 @@ function Ledger() {
             <p
               aria-live="polite"
               className={cn(
-                "font-display text-hero num mt-2 leading-none tracking-tight",
+                "font-display num mt-2 leading-none tracking-tight",
+                viewingNow && cash ? "text-3xl" : "text-hero",
                 remaining < 0 ? "text-negative" : "text-fg",
               )}
             >
@@ -229,7 +264,14 @@ function Ledger() {
               </div>
               <div>
                 <dt className="text-sm text-muted">Spent</dt>
-                <dd className="num mt-1 text-xl font-medium text-negative">−{formatMoney(spent)}</dd>
+                <dd
+                  className={cn(
+                    "num mt-1 text-xl font-medium",
+                    spent < 0 ? "text-positive" : "text-negative",
+                  )}
+                >
+                  {spent < 0 ? `+${formatMoney(spent)}` : `−${formatMoney(spent)}`}
+                </dd>
               </div>
             </dl>
           </div>
@@ -292,30 +334,15 @@ function Ledger() {
           className="min-w-0 rounded-3xl bg-surface p-6 lg:col-span-5"
         >
           <h2 className="text-lg font-medium">New entry</h2>
-          <div
-            className="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-raised p-1"
-            role="radiogroup"
-            aria-label="Entry type"
-          >
-            {(["expense", "income"] as const).map((kind) => {
-              const selected = draft.kind === kind;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  role="radio"
-                  aria-checked={selected}
-                  className={cn(
-                    "h-10 rounded-md text-sm font-medium capitalize",
-                    selected ? "bg-fg text-bg" : "text-muted hover:text-fg",
-                  )}
-                  onClick={() => changeKind(kind)}
-                >
-                  {kind}
-                </button>
-              );
-            })}
+          <div className="mt-4">
+            <KindPicker kind={draft.kind} onChange={changeKind} />
           </div>
+          {draft.kind === "transfer" ? (
+            <DirectionPicker
+              direction={draft.direction}
+              onChange={(direction) => setDraft((current) => ({ ...current, direction }))}
+            />
+          ) : null}
           <div className="mt-4">
             <FieldLabel htmlFor="amount">Amount</FieldLabel>
             <TextInput
@@ -367,11 +394,19 @@ function Ledger() {
               onChange={(event) => setDraft((current) => ({ ...current, note: event.target.value }))}
             />
           </div>
+          {draft.kind === "transfer" ? (
+            <p className="mt-3 text-sm text-muted">
+              Out leaves this balance. In adds to it. Neither counts as spending.
+            </p>
+          ) : null}
+          {draft.kind === "refund" ? (
+            <p className="mt-3 text-sm text-muted">Refunds reduce spending in that category.</p>
+          ) : null}
           {formError ? (
             <p role="alert" className="mt-3 text-sm text-negative">
               {formError}
             </p>
-          ) : projected != null ? (
+          ) : projected != null && draft.kind !== "transfer" ? (
             <p className="num mt-3 text-sm text-muted">
               {draftInView
                 ? `Left after this: ${projected < 0 ? "−" : ""}${formatMoney(projected)}`
@@ -379,7 +414,7 @@ function Ledger() {
             </p>
           ) : null}
           <Button type="submit" className="mt-4 w-full">
-            Add {draft.kind}
+            Add {KIND_LABEL[draft.kind].toLowerCase()}
           </Button>
         </form>
 
@@ -412,7 +447,7 @@ function Ledger() {
                           <p
                             className={cn(
                               "num shrink-0 text-base font-medium",
-                              row.kind === "income" ? "text-positive" : "text-fg",
+                              row.kind === "income" || row.kind === "refund" ? "text-positive" : "text-fg",
                             )}
                           >
                             {formatSigned(row.amountCents, row.kind)}
@@ -421,7 +456,7 @@ function Ledger() {
                         <p className="truncate text-sm text-muted">
                           <time dateTime={row.date}>{formatDay(row.date)}</time>
                           {" · "}
-                          {row.note ? row.category : row.kind === "income" ? "Income" : "Expense"}
+                          {entryDetail(row)}
                         </p>
                       </div>
                       <Button
@@ -474,7 +509,8 @@ function Ledger() {
       </div>
 
       <p className="mt-6 text-sm text-subtle">
-        Synced from X Money for September and October. Saved on this device.
+        Keel never moves money. Entries stay on this device. Synced from X Money for September and
+        October.
       </p>
 
       {editing ? (
@@ -590,6 +626,74 @@ function SpendChart({ slices }: { slices: ReturnType<typeof spendingByCategory> 
   );
 }
 
+function KindPicker({ kind, onChange }: { kind: Kind; onChange: (kind: Kind) => void }) {
+  return (
+    <div
+      className="grid grid-cols-2 gap-1 rounded-lg bg-raised p-1"
+      role="radiogroup"
+      aria-label="Entry type"
+    >
+      {ENTRY_KINDS.map((option) => {
+        const selected = kind === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            className={cn(
+              "h-11 rounded-md text-sm font-medium",
+              selected ? "bg-fg text-bg" : "text-muted hover:text-fg",
+            )}
+            onClick={() => onChange(option)}
+          >
+            {KIND_LABEL[option]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DirectionPicker({
+  direction,
+  onChange,
+}: {
+  direction: TransferDirection;
+  onChange: (direction: TransferDirection) => void;
+}) {
+  const options: { value: TransferDirection; label: string }[] = [
+    { value: "out", label: "Out" },
+    { value: "in", label: "In" },
+  ];
+  return (
+    <div
+      className="mt-3 grid grid-cols-2 gap-1 rounded-lg bg-raised p-1"
+      role="radiogroup"
+      aria-label="Transfer direction"
+    >
+      {options.map((option) => {
+        const selected = direction === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            className={cn(
+              "h-11 rounded-md text-sm font-medium",
+              selected ? "bg-fg text-bg" : "text-muted hover:text-fg",
+            )}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function SpendTip({
   active,
   payload,
@@ -662,30 +766,16 @@ function EditDialog({
             Update the amount, category, or date. Deleting removes it from the balance.
           </Dialog.Description>
           <form onSubmit={onSubmit} className="mt-4">
-            <div
-              className="grid grid-cols-2 gap-1 rounded-lg bg-raised p-1"
-              role="radiogroup"
-              aria-label="Entry type"
-            >
-              {(["expense", "income"] as const).map((kind) => {
-                const selected = draft.kind === kind;
-                return (
-                  <button
-                    key={kind}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    className={cn(
-                      "h-10 rounded-md text-sm font-medium capitalize",
-                      selected ? "bg-fg text-bg" : "text-muted hover:text-fg",
-                    )}
-                    onClick={() => changeKind(kind)}
-                  >
-                    {kind}
-                  </button>
-                );
-              })}
-            </div>
+            <KindPicker kind={draft.kind} onChange={changeKind} />
+            {draft.kind === "transfer" ? (
+              <DirectionPicker
+                direction={draft.direction}
+                onChange={(direction) => {
+                  setDraft((current) => ({ ...current, direction }));
+                  setConfirming(false);
+                }}
+              />
+            ) : null}
             <div className="mt-4">
               <FieldLabel htmlFor="edit-amount">Amount</FieldLabel>
               <TextInput

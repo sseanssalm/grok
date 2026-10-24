@@ -1,6 +1,6 @@
 # Keel
 
-Keel is a personal financing ledger. For the month you are viewing it totals income and spending, shows what is left, and compares that remainder with a savings goal. You can add, edit, and remove entries. Everything stays on the device — the website uses browser storage, and the Android app uses the same storage inside its WebView. There is no account and no server API.
+Keel is a personal financing ledger. It keeps a month of income, spending, refunds, and transfers, and compares what is left with a savings goal. On the current month it also forecasts safe-to-spend from cash on hand, a paycheck schedule, and bills you enter by hand (rent, car insurance, and the rest). A warning appears five days before each bill. If incoming money will not cover those bills, Keel shows the dollar gap. Transfers between your own accounts, including cash moved to fund another account, stay out of spending. Refunds reduce spending in the original category. Charge notes can flag a new repeat, a trial, a price jump, or a same-day duplicate. Keel never moves money. Everything stays on the device — the website uses browser storage, and the Android app uses the same storage inside its WebView. There is no account, no bank connection, and no server API. Encrypting that on-device storage was skipped: there are no bank credentials to protect, and a key stored next to the data would not be real protection.
 
 ## Web app
 
