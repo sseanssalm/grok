@@ -1,6 +1,63 @@
 # Keel
 
-Keel is a personal financing ledger. It keeps a month of income, spending, refunds, and transfers, and compares what is left with a savings goal. On the current month it also forecasts safe-to-spend from cash on hand, a paycheck schedule, and bills you enter by hand (rent, car insurance, and the rest). A warning appears five days before each bill. If incoming money will not cover those bills, Keel shows the dollar gap. Transfers between your own accounts, including cash moved to fund another account, stay out of spending. Refunds reduce spending in the original category. Charge notes can flag a new repeat, a trial, a price jump, or a same-day duplicate. Keel never moves money. Everything stays on the device — the website uses browser storage, and the Android app uses the same storage inside its WebView. There is no account, no bank connection, and no server API. Encrypting that on-device storage was skipped: there are no bank credentials to protect, and a key stored next to the data would not be real protection.
+Keel is a personal financing ledger. It keeps a month of income, spending, refunds, and transfers, and compares what is left with a savings goal. On the current month it also forecasts safe-to-spend from cash on hand, a paycheck schedule, and bills you enter by hand (rent, car insurance, and the rest). A warning appears five days before each bill. If incoming money will not cover those bills, Keel shows the dollar gap. Transfers between your own accounts, including cash moved to fund another account, stay out of spending. Refunds reduce spending in the original category. Charge notes can flag a new repeat, a trial, a price jump, or a same-day duplicate. Keel never moves money, and it does not connect to X Money. Transactions from X Money come in through a file import. Everything stays on the device — the website uses browser storage, and the Android app uses the same storage inside its WebView. There is no account and no server API. Encrypting that on-device storage was skipped: there are no bank credentials to protect, and a key stored next to the data would not be real protection.
+
+## Import from X Money
+
+Keel cannot sign in to X Money. Export the transactions elsewhere, save a UTF-8 CSV or JSON file in the format below, then choose **Import from X Money** in Keel. On Android that button opens the system file picker. The import only adds rows. It does not edit, delete, or replace manual entries or earlier imports, and it does not move money. Afterward Keel shows how many rows were added and how many were skipped as duplicates.
+
+Limits: 1 MB and 5,000 data rows. Amounts are decimal dollars (not cents). Dates are `YYYY-MM-DD`. A row with a bad date, an unreadable amount, an unknown `type`, or an unknown `direction` is skipped and counted as unreadable. The rest of the file still imports.
+
+### Identity
+
+- When `id` is present, that X Money transaction id is the identity. Importing the same id again — in the same file or a later overlapping file — adds nothing and does not change the row already in Keel, even if the amount or note differs.
+- When `id` is blank, the identity is `date` + amount in cents + counterparty (lowercase, extra space collapsed). The description is used only if counterparty is blank. A hand-entered note that equals that counterparty, or an earlier import of the same triple, counts as the same row and is skipped.
+- An `id` is never merged into a hand-entered row. Include ids whenever X Money has them so a later file cannot repeat those transactions, and so a hand-entered line is left untouched.
+
+### Fields
+
+CSV header, in this order:
+
+```csv
+id,date,amount,direction,counterparty,note,type
+```
+
+JSON is either a bare array or `{ "transactions": [ ... ] }` with the same field names. These alternate names are accepted for the same fields: `transaction_id` or `transactionId`; `sign` for direction; `payee` for counterparty; `description` or `memo` for note; `kind` for type.
+
+| Field | Required | Values |
+| --- | --- | --- |
+| `id` | No | X Money transaction id, up to 128 characters. |
+| `date` | Yes | `YYYY-MM-DD`. |
+| `amount` | Yes | Decimal dollars. A leading `-`, or parentheses, marks money out. `$` and thousands commas are allowed. Zero is rejected. |
+| `direction` | No | `in` or `out`. If it disagrees with the sign, direction wins. |
+| `counterparty` | No | Payee or account name, shown on the row. Up to 80 characters. |
+| `note` | No | Description. When both this and counterparty are set, the entry note is `counterparty — note`. |
+| `type` | No | `expense`, `income`, `transfer`, or `refund`. When set, this wins over direction and sign. When omitted, `out` or a negative amount is an expense and anything else is income. |
+
+`transfer` is stored as a transfer, so it is not spending. `out` leaves this balance and `in` adds to it. If direction is omitted, a negative amount is `out` and a positive amount is `in`. Counterparty or note text that contains “cash” or “ATM” uses the category **Cash to another account**; other transfers use **Between my accounts**. `refund` is stored as a refund and reduces spending. Imported income and expenses use the category **Other** (a paycheck is not assumed). Categories can be edited afterward; the X Money id stays on the row.
+
+```csv
+id,date,amount,direction,counterparty,note,type
+xm_cafe,2026-10-24,-12.00,out,Cafe,Lunch,expense
+xm_move,2026-10-24,50.00,out,Checking,Move,transfer
+xm_back,2026-10-22,5.00,in,Market,Return,refund
+```
+
+```json
+{
+  "transactions": [
+    {
+      "id": "xm_cafe",
+      "date": "2026-10-24",
+      "amount": "-12.00",
+      "direction": "out",
+      "counterparty": "Cafe",
+      "note": "Lunch",
+      "type": "expense"
+    }
+  ]
+}
+```
 
 ## Web app
 
@@ -18,7 +75,7 @@ npm run build    # production web build (Vercel / Nitro)
 npm run typecheck
 ```
 
-No API keys are required. Auth is off (`VITE_AUTH_ENABLED` is `false` in `.grok/app-env.json`). `DATABASE_URL` is not used; `npm run build` skips migrations when it is unset. The optional X Money seed list in `src/lib/xmoney-sync.ts` is empty in this repository.
+No API keys are required. Auth is off (`VITE_AUTH_ENABLED` is `false` in `.grok/app-env.json`). `DATABASE_URL` is not used; `npm run build` skips migrations when it is unset. The optional X Money seed list in `src/lib/xmoney-sync.ts` is empty in this repository. X Money transactions enter through the file import above, not through that list.
 
 ## Android app
 

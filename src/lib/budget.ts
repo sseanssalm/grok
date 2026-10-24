@@ -14,6 +14,10 @@ export type Transaction = {
   note: string;
   date: string;
   direction?: TransferDirection;
+  /** X Money transaction id. Set only by import. */
+  externalId?: string;
+  /** Date + amount + counterparty key for an imported row that had no id. */
+  importKey?: string;
 };
 
 export type PaySchedule = {
@@ -174,11 +178,25 @@ function isTransaction(value: unknown): value is Transaction {
     row.kind === "refund" ||
     row.kind === "transfer";
   const directionOk = row.direction === undefined || row.direction === "in" || row.direction === "out";
+  const externalOk =
+    row.externalId === undefined ||
+    (typeof row.externalId === "string" &&
+      row.externalId.length > 0 &&
+      row.externalId.length <= 128 &&
+      !/[\r\n]/.test(row.externalId));
+  const importKeyOk =
+    row.importKey === undefined ||
+    (typeof row.importKey === "string" &&
+      row.importKey.length > 0 &&
+      row.importKey.length <= 220 &&
+      !/[\r\n]/.test(row.importKey));
   return (
     typeof row.id === "string" &&
     row.id.length > 0 &&
     kindOk &&
     directionOk &&
+    externalOk &&
+    importKeyOk &&
     Number.isInteger(row.amountCents) &&
     row.amountCents > 0 &&
     row.amountCents <= 99_999_999_99 &&
@@ -261,6 +279,7 @@ type BudgetState = {
   pay: PaySchedule | null;
   cash: CashSnapshot | null;
   addTransaction: (input: Omit<Transaction, "id">) => void;
+  addTransactions: (rows: Transaction[]) => void;
   updateTransaction: (id: string, input: Omit<Transaction, "id">) => void;
   removeTransaction: (id: string) => void;
   removeMonth: (month: string) => void;
@@ -285,9 +304,41 @@ export const useBudget = create<BudgetState>()(
       xmoneyRevision: XMONEY_REVISION,
       addTransaction: (input) =>
         set((state) => ({ transactions: [...state.transactions, { ...input, id: newId() }] })),
+      addTransactions: (rows) =>
+        set((state) => {
+          if (rows.length === 0) return state;
+          const ids = new Set(state.transactions.map((row) => row.id));
+          const externalIds = new Set(
+            state.transactions.flatMap((row) => (row.externalId ? [row.externalId] : [])),
+          );
+          const importKeys = new Set(
+            state.transactions.flatMap((row) => (row.importKey ? [row.importKey] : [])),
+          );
+          const next: Transaction[] = [];
+          for (const row of rows) {
+            if (!isTransaction(row) || ids.has(row.id)) continue;
+            if (row.externalId && externalIds.has(row.externalId)) continue;
+            if (row.importKey && importKeys.has(row.importKey)) continue;
+            ids.add(row.id);
+            if (row.externalId) externalIds.add(row.externalId);
+            if (row.importKey) importKeys.add(row.importKey);
+            next.push(row);
+          }
+          if (next.length === 0) return state;
+          return { transactions: [...state.transactions, ...next] };
+        }),
       updateTransaction: (id, input) =>
         set((state) => ({
-          transactions: state.transactions.map((row) => (row.id === id ? { ...input, id } : row)),
+          transactions: state.transactions.map((row) =>
+            row.id === id
+              ? {
+                  ...input,
+                  id,
+                  ...(row.externalId ? { externalId: row.externalId } : {}),
+                  ...(row.importKey ? { importKey: row.importKey } : {}),
+                }
+              : row,
+          ),
         })),
       removeTransaction: (id) =>
         set((state) => ({ transactions: state.transactions.filter((row) => row.id !== id) })),

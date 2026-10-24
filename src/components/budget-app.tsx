@@ -11,6 +11,7 @@ import {
 import { ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FieldLabel, SelectInput, TextInput } from "@/components/ui/field";
+import { ImportXMoney } from "@/components/import-xmoney";
 import { PlanPanel } from "@/components/plan-panel";
 import {
   ENTRY_KINDS,
@@ -231,6 +232,13 @@ function Ledger() {
           </Button>
         </div>
       </header>
+
+      <ImportXMoney
+        onAdded={(nextMonth) => {
+          setMonth(nextMonth);
+          setConfirmClear(false);
+        }}
+      />
 
       {!viewingNow ? (
         <div className="mb-4">
