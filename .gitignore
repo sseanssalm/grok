@@ -1,4 +1,6 @@
 node_modules/
+dist/
+.output/
 .project_id
 .github_repo
 .env

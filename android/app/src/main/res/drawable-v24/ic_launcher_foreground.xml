@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Keel mark, scaled from the 32px favicon into the adaptive-icon safe zone. -->
+    <path
+        android:fillColor="#F3F4F6"
+        android:pathData="M27,27h10.8v21.6L64.8,27H77.625l-23.9625,24.975L78.975,81h-13.1625l-17.8875,-21.6V81H27V27z" />
+</vector>
