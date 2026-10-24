@@ -337,8 +337,7 @@ function Ledger() {
         <div className="mb-4 rounded-3xl bg-surface p-6">
           <p className="text-sm text-muted">
             Categorized {undoCategories.length} imported {undoCategories.length === 1 ? "row" : "rows"}.
-            Hand-entered categories were left as they were. The savings goal still uses this month's
-            income and spending.
+            Hand-entered categories were left as they were.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button type="button" variant="quiet" onClick={() => undoImportedCategories()}>
@@ -565,8 +564,7 @@ function Ledger() {
       </div>
 
       <p className="mt-6 text-sm text-subtle">
-        Keel never moves money. Entries stay on this device. Synced from X Money for September and
-        October.
+        Keel never moves money. Entries stay on this device.
       </p>
 
       {editing ? (

@@ -270,9 +270,11 @@ export function PlanPanel() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button type="button" variant="quiet" onClick={() => setCashOpen((open) => !open)}>
-            {cashOpen ? "Close cash" : cash ? "Edit cash" : "Set cash"}
-          </Button>
+          {cash || cashOpen ? (
+            <Button type="button" variant="quiet" onClick={() => setCashOpen((open) => !open)}>
+              {cashOpen ? "Close cash" : "Edit cash"}
+            </Button>
+          ) : null}
           <Button type="button" variant="quiet" onClick={() => setPayOpen((open) => !open)}>
             {payOpen ? "Close paycheck" : pay ? "Edit paycheck" : "Set paycheck"}
           </Button>
