@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* Explicit source so the Capacitor bundle (Vite root `android-shell/`) still
+   sees utility classes in this tree. The website build already scans `src`. */
+@source ".";
 
 @theme {
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
