@@ -14,6 +14,7 @@ import {
   type PaySchedule,
 } from "@/lib/budget";
 import { buildForecast, chargeFlags, type ChargeFlag } from "@/lib/forecast";
+import { billOffers, paycheckOffers } from "@/lib/inferences";
 import { cn } from "@/lib/utils";
 
 const FLAG_LABEL: Record<ChargeFlag["kind"], string> = {
@@ -22,6 +23,14 @@ const FLAG_LABEL: Record<ChargeFlag["kind"], string> = {
   trial: "Trial",
   "new-recurring": "New subscription",
 };
+
+function cadencePhrase(cadence: string): string {
+  if (cadence === "weekly") return "every week";
+  if (cadence === "biweekly") return "every 2 weeks";
+  if (cadence === "semimonthly") return "on the 1st and 15th";
+  if (cadence === "yearly") return "every year";
+  return "every month";
+}
 
 function signedMoney(cents: number): string {
   return cents < 0 ? `−${formatMoney(cents)}` : formatMoney(cents);
@@ -44,6 +53,8 @@ export function PlanPanel() {
   const clearPay = useBudget((state) => state.clearPay);
   const setCash = useBudget((state) => state.setCash);
   const clearCash = useBudget((state) => state.clearCash);
+  const dismissedOffers = useBudget((state) => state.dismissedOffers);
+  const dismissOffer = useBudget((state) => state.dismissOffer);
 
   const today = todayISO();
   const forecast = useMemo(
@@ -51,11 +62,22 @@ export function PlanPanel() {
     [cash, pay, bills, transactions, today],
   );
   const flags = useMemo(() => chargeFlags(transactions, today), [transactions, today]);
+  const paySuggestions = useMemo(
+    () => paycheckOffers(transactions, pay, dismissedOffers),
+    [transactions, pay, dismissedOffers],
+  );
+  const billSuggestions = useMemo(
+    () => billOffers(transactions, bills, dismissedOffers),
+    [transactions, bills, dismissedOffers],
+  );
+  const imported = transactions.some((row) => row.externalId || row.importKey);
 
   const [cashOpen, setCashOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [billOpen, setBillOpen] = useState(false);
   const [confirmBill, setConfirmBill] = useState<string | null>(null);
+  const [flagPreference, setFlagPreference] = useState<boolean | null>(null);
+  const flagsOpen = flagPreference ?? flags.length <= 3;
 
   const hero =
     forecast.safeToSpendCents != null
@@ -64,7 +86,9 @@ export function PlanPanel() {
         ? { label: "Next 7 days", cents: forecast.weekCents }
         : null;
 
-  let heroCopy = "Set cash on hand to forecast the next 7 days and the coming month.";
+  let heroCopy = imported
+    ? "The import lists transactions, not the account balance. Enter cash on hand and the forecast can use it."
+    : "Enter cash on hand to forecast the next 7 days and the coming month.";
   if (forecast.safeToSpendCents != null && forecast.payday) {
     heroCopy = `Before ${formatDay(forecast.payday)}. Bills due sooner are already taken out.`;
   } else if (forecast.weekCents != null) {
@@ -82,7 +106,7 @@ export function PlanPanel() {
           <p
             aria-live="polite"
             className={cn(
-              "font-display text-hero num mt-2 leading-none tracking-tight",
+              "font-display text-3xl num mt-2 leading-none tracking-tight",
               hero.cents < 0 ? "text-negative" : "text-fg",
             )}
           >
@@ -92,6 +116,11 @@ export function PlanPanel() {
           <p className="mt-2 text-lg font-medium">Cash on hand is not set.</p>
         )}
         <p className="mt-3 text-sm text-muted">{heroCopy}</p>
+        {!hero ? (
+          <Button type="button" className="mt-4" onClick={() => setCashOpen(true)}>
+            Set cash on hand
+          </Button>
+        ) : null}
 
         {forecast.shortfallCents != null && forecast.shortfallCents > 0 ? (
           <p role="alert" className="mt-4 rounded-lg bg-raised px-4 py-3 text-sm text-negative">
@@ -120,6 +149,70 @@ export function PlanPanel() {
               </div>
             ) : null}
           </dl>
+        ) : null}
+
+        {paySuggestions.length > 0 || billSuggestions.length > 0 ? (
+          <div className="mt-6 border-t border-border pt-4">
+            <h2 className="text-lg font-medium">From your history</h2>
+            <p className="mt-1 text-sm text-muted">
+              Nothing here is added until you accept it. You can remove a bill or paycheck afterward.
+            </p>
+            <ul className="mt-2 divide-y divide-border">
+              {paySuggestions.map((offer) => (
+                <li key={offer.key} className="py-3">
+                  <p className="font-medium">{offer.name}</p>
+                  <p className="text-sm text-muted">
+                    {formatMoney(offer.amountCents)} {cadencePhrase(offer.cadence)}, seen {offer.count} times.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        setPay({
+                          amountCents: offer.amountCents,
+                          cadence: offer.cadence,
+                          anchor: offer.anchor,
+                        });
+                        dismissOffer(offer.key);
+                      }}
+                    >
+                      Use paycheck
+                    </Button>
+                    <Button type="button" variant="quiet" onClick={() => dismissOffer(offer.key)}>
+                      Not now
+                    </Button>
+                  </div>
+                </li>
+              ))}
+              {billSuggestions.map((offer) => (
+                <li key={offer.key} className="py-3">
+                  <p className="font-medium">{offer.name}</p>
+                  <p className="text-sm text-muted">
+                    {formatMoney(offer.amountCents)} {cadencePhrase(offer.cadence)}, seen {offer.count} times.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        addBill({
+                          name: offer.name,
+                          amountCents: offer.amountCents,
+                          cadence: offer.cadence,
+                          anchor: offer.anchor,
+                        });
+                        dismissOffer(offer.key);
+                      }}
+                    >
+                      Add bill
+                    </Button>
+                    <Button type="button" variant="quiet" onClick={() => dismissOffer(offer.key)}>
+                      Not now
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
 
         <div className="mt-6 border-t border-border pt-4">
@@ -235,10 +328,19 @@ export function PlanPanel() {
 
       {flags.length > 0 ? (
         <section className="rounded-3xl bg-surface p-6">
-          <h2 className="text-lg font-medium">Check these charges</h2>
-          <p className="mt-1 text-sm text-muted">
-            New repeats, trials, price jumps, and same-day duplicates. Steady subscriptions stay off this list.
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-medium">Check these charges</h2>
+              <p className="mt-1 text-sm text-muted">
+                {flags.length} {flags.length === 1 ? "item" : "items"}. Stores, charging, and restaurants with
+                changing totals are left out.
+              </p>
+            </div>
+            <Button type="button" variant="quiet" onClick={() => setFlagPreference(!flagsOpen)}>
+              {flagsOpen ? "Hide" : "Show"}
+            </Button>
+          </div>
+          {flagsOpen ? (
           <ul className="mt-2 divide-y divide-border">
             {flags.map((flag) => (
               <li key={`${flag.kind}-${flag.id}`} className="py-3">
@@ -255,6 +357,7 @@ export function PlanPanel() {
               </li>
             ))}
           </ul>
+          ) : null}
         </section>
       ) : null}
     </div>

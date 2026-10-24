@@ -1,8 +1,11 @@
 import type { Kind, Transaction, TransferDirection } from "./budget.ts";
 import { parseISODate } from "./forecast.ts";
+import { suggestExpenseCategory, suggestIncomeCategory } from "./merchants.ts";
 
 export const XMONEY_IMPORT_MAX_CHARS = 1_000_000;
 export const XMONEY_IMPORT_MAX_ROWS = 5_000;
+
+export type ImportedBalance = { amountCents: number; asOf: string };
 
 export type ImportResult = {
   error?: string;
@@ -10,6 +13,7 @@ export type ImportResult = {
   added: number;
   skippedDuplicates: number;
   skippedInvalid: number;
+  balance: ImportedBalance | null;
 };
 
 type RawRow = {
@@ -20,6 +24,7 @@ type RawRow = {
   counterparty?: string;
   note?: string;
   type?: string;
+  balance?: unknown;
 };
 
 const HEADER_TO_FIELD: Record<string, keyof RawRow> = {
@@ -37,10 +42,12 @@ const HEADER_TO_FIELD: Record<string, keyof RawRow> = {
   memo: "note",
   type: "type",
   kind: "type",
+  balance: "balance",
+  available: "balance",
 };
 
 export function importXMoney(text: string, existing: readonly Transaction[]): ImportResult {
-  const empty = { rows: [], added: 0, skippedDuplicates: 0, skippedInvalid: 0 };
+  const empty = { rows: [], added: 0, skippedDuplicates: 0, skippedInvalid: 0, balance: null };
   const source = text.replace(/^\uFEFF/, "");
   if (!source.trim()) return { ...empty, error: "This file is empty." };
   if (source.length > XMONEY_IMPORT_MAX_CHARS) {
@@ -64,8 +71,14 @@ export function importXMoney(text: string, existing: readonly Transaction[]): Im
   const rows: Transaction[] = [];
   let skippedDuplicates = 0;
   let skippedInvalid = 0;
+  let balance = parsed.balance;
 
   for (const record of records) {
+    const rowBalance = readBalance(record.balance);
+    const rowDate = record.date?.trim() ?? "";
+    if (rowBalance != null && parseISODate(rowDate) && (!balance || rowDate >= balance.asOf)) {
+      balance = { amountCents: rowBalance, asOf: rowDate };
+    }
     const built = toTransaction(record);
     if (!built) {
       skippedInvalid += 1;
@@ -91,21 +104,25 @@ export function importXMoney(text: string, existing: readonly Transaction[]): Im
     rows.push(built);
   }
 
-  return { rows, added: rows.length, skippedDuplicates, skippedInvalid };
+  if (balance && !balance.asOf) balance = null;
+  return { rows, added: rows.length, skippedDuplicates, skippedInvalid, balance };
 }
 
-function parseDocument(source: string): { rows?: RawRow[]; error?: string } {
+function parseDocument(source: string): { rows?: RawRow[]; error?: string; balance: ImportedBalance | null } {
   const trimmed = source.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) return parseJson(trimmed);
   return parseCsv(source);
 }
 
-function parseJson(source: string): { rows?: RawRow[]; error?: string } {
+function parseJson(source: string): { rows?: RawRow[]; error?: string; balance: ImportedBalance | null } {
   let value: unknown;
   try {
     value = JSON.parse(source);
   } catch {
-    return { error: "This JSON could not be read. Use a transactions array in the X Money format." };
+    return {
+      error: "This JSON could not be read. Use a transactions array in the X Money format.",
+      balance: null,
+    };
   }
   const list = Array.isArray(value)
     ? value
@@ -113,7 +130,15 @@ function parseJson(source: string): { rows?: RawRow[]; error?: string } {
       ? (value as { transactions: unknown[] }).transactions
       : null;
   if (!list) {
-    return { error: "This JSON needs a transactions array, or it should be an array itself." };
+    return { error: "This JSON needs a transactions array, or it should be an array itself.", balance: null };
+  }
+  let balance: ImportedBalance | null = null;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as { balance?: unknown; available?: unknown; balanceAsOf?: unknown };
+    const amount = readBalance(record.balance ?? record.available);
+    const asOf = typeof record.balanceAsOf === "string" ? record.balanceAsOf.trim() : "";
+    if (amount != null && parseISODate(asOf)) balance = { amountCents: amount, asOf };
+    else if (amount != null) balance = { amountCents: amount, asOf: "" };
   }
   const rows: RawRow[] = [];
   for (const item of list) {
@@ -123,7 +148,7 @@ function parseJson(source: string): { rows?: RawRow[]; error?: string } {
     }
     rows.push(rawFromRecord(item as Record<string, unknown>));
   }
-  return { rows };
+  return { rows, balance };
 }
 
 function rawFromRecord(record: Record<string, unknown>): RawRow {
@@ -131,8 +156,8 @@ function rawFromRecord(record: Record<string, unknown>): RawRow {
   for (const [key, value] of Object.entries(record)) {
     const field = HEADER_TO_FIELD[key.trim().toLowerCase()];
     if (!field || raw[field] !== undefined) continue;
-    if (field === "amount") {
-      raw.amount = value;
+    if (field === "amount" || field === "balance") {
+      raw[field] = value;
       continue;
     }
     if (typeof value === "number" && Number.isFinite(value) && field === "id") {
@@ -144,10 +169,10 @@ function rawFromRecord(record: Record<string, unknown>): RawRow {
   return raw;
 }
 
-function parseCsv(source: string): { rows?: RawRow[]; error?: string } {
+function parseCsv(source: string): { rows?: RawRow[]; error?: string; balance: ImportedBalance | null } {
   const table = parseCsvTable(source);
-  if (!table) return { error: "This CSV has an unfinished quoted field." };
-  if (table.length === 0) return { error: "This file is empty." };
+  if (!table) return { error: "This CSV has an unfinished quoted field.", balance: null };
+  if (table.length === 0) return { error: "This file is empty.", balance: null };
   const headers = table[0].map((cell) => cell.trim().toLowerCase());
   const columns = new Map<keyof RawRow, number>();
   headers.forEach((header, index) => {
@@ -155,7 +180,7 @@ function parseCsv(source: string): { rows?: RawRow[]; error?: string } {
     if (field && !columns.has(field)) columns.set(field, index);
   });
   if (!columns.has("date") || !columns.has("amount")) {
-    return { error: "This CSV needs a header row with date and amount." };
+    return { error: "This CSV needs a header row with date and amount.", balance: null };
   }
   const rows: RawRow[] = [];
   for (const cells of table.slice(1)) {
@@ -172,9 +197,10 @@ function parseCsv(source: string): { rows?: RawRow[]; error?: string } {
       counterparty: read("counterparty"),
       note: read("note"),
       type: read("type"),
+      balance: read("balance"),
     });
   }
-  return { rows };
+  return { rows, balance: null };
 }
 
 function parseCsvTable(source: string): string[][] | null {
@@ -241,7 +267,7 @@ function toTransaction(raw: RawRow): Transaction | null {
     id: externalId ? stableId(externalId) : fallbackId(date, amount.cents, party),
     kind,
     amountCents: amount.cents,
-    category: categoryFor(kind, `${counterparty} ${description}`),
+    category: categoryFor(kind, `${counterparty} ${description}`, note),
     note,
     date,
     ...(transferDirection ? { direction: transferDirection } : {}),
@@ -267,10 +293,12 @@ function resolveKind(
   return null;
 }
 
-function categoryFor(kind: Kind, text: string): string {
-  if (kind === "income") return "Other";
-  if (kind !== "transfer") return "Other";
-  return /\b(cash|atm)\b/i.test(text) ? "Cash to another account" : "Between my accounts";
+function categoryFor(kind: Kind, text: string, note: string): string {
+  if (kind === "transfer") {
+    return /\b(cash|atm)\b/i.test(text) ? "Cash to another account" : "Between my accounts";
+  }
+  if (kind === "income") return suggestIncomeCategory(note) ?? "Other";
+  return suggestExpenseCategory(note) ?? "Other";
 }
 
 function buildNote(counterparty: string, description: string): string {
@@ -311,6 +339,15 @@ function readDirection(value: string | undefined): TransferDirection | null | un
   if (!trimmed) return undefined;
   if (trimmed === "in" || trimmed === "out") return trimmed;
   return null;
+}
+
+function readBalance(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && value === 0) return 0;
+  if (typeof value === "string" && /^0(?:\.0{1,2})?$/.test(value.trim().replace(/[$,\s]/g, ""))) return 0;
+  const parsed = parseAmount(value);
+  if (!parsed || parsed.negative) return null;
+  return parsed.cents;
 }
 
 function parseAmount(value: unknown): { cents: number; negative: boolean } | null {

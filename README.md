@@ -33,8 +33,11 @@ JSON is either a bare array or `{ "transactions": [ ... ] }` with the same field
 | `counterparty` | No | Payee or account name, shown on the row. Up to 80 characters. |
 | `note` | No | Description. When both this and counterparty are set, the entry note is `counterparty — note`. |
 | `type` | No | `expense`, `income`, `transfer`, or `refund`. When set, this wins over direction and sign. When omitted, `out` or a negative amount is an expense and anything else is income. |
+| `balance` | No | Account balance in decimal dollars, zero or more. On a CSV row it is the balance that day. In JSON, a top-level `balance` uses `balanceAsOf` (`YYYY-MM-DD`). Keel sets cash on hand from it only when cash on hand is empty, and that can be undone. |
 
-`transfer` is stored as a transfer, so it is not spending. `out` leaves this balance and `in` adds to it. If direction is omitted, a negative amount is `out` and a positive amount is `in`. Counterparty or note text that contains “cash” or “ATM” uses the category **Cash to another account**; other transfers use **Between my accounts**. `refund` is stored as a refund and reduces spending. Imported income and expenses use the category **Other** (a paycheck is not assumed). Categories can be edited afterward; the X Money id stays on the row.
+Known merchants are categorized on the way in (Walmart as groceries, Tesla Supercharger as transport, Taco Bell as dining, Deposit Check as a paycheck). Rows you already categorized stay as they are, and a bulk category pass can be undone. Repeating paychecks and subscriptions are offered and are not added until you accept them. Routine stores, charging stops, and restaurants are not treated as new subscriptions when the amount changes.
+
+`transfer` is stored as a transfer, so it is not spending. `out` leaves this balance and `in` adds to it. If direction is omitted, a negative amount is `out` and a positive amount is `in`. Counterparty or note text that contains “cash” or “ATM” uses the category **Cash to another account**; other transfers use **Between my accounts**. `refund` is stored as a refund and reduces spending. Income and expenses that do not match a known merchant stay **Other**. Categories can be edited afterward; the X Money id stays on the row. `available` is accepted as another name for `balance`.
 
 ```csv
 id,date,amount,direction,counterparty,note,type

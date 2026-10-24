@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { monthKey, useBudget } from "@/lib/budget";
+import { formatMoney, monthKey, useBudget } from "@/lib/budget";
 import { importXMoney } from "@/lib/xmoney-import";
 
 export function ImportXMoney({ onAdded }: { onAdded: (month: string) => void }) {
@@ -31,13 +31,22 @@ export function ImportXMoney({ onAdded }: { onAdded: (month: string) => void }) 
       return;
     }
     addTransactions(result.rows);
+    let balanceNote = "";
+    if (result.balance) {
+      if (useBudget.getState().cash) {
+        balanceNote = ` File balance ${formatMoney(result.balance.amountCents)} was not applied.`;
+      } else {
+        useBudget.getState().setCashFromImport(result.balance);
+        balanceNote = ` Set cash on hand to ${formatMoney(result.balance.amountCents)}.`;
+      }
+    }
     setError("");
     const duplicateLabel = result.skippedDuplicates === 1 ? "duplicate" : "duplicates";
     const invalid =
       result.skippedInvalid > 0
         ? ` ${result.skippedInvalid} ${result.skippedInvalid === 1 ? "row" : "rows"} could not be read.`
         : "";
-    setSummary(`Added ${result.added}. Skipped ${result.skippedDuplicates} ${duplicateLabel}.${invalid}`);
+    setSummary(`Added ${result.added}. Skipped ${result.skippedDuplicates} ${duplicateLabel}.${invalid}${balanceNote}`);
     const newest = result.rows.reduce((latest, row) => (row.date > latest ? row.date : latest), "");
     if (newest) onAdded(monthKey(newest));
   }

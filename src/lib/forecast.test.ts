@@ -171,6 +171,32 @@ test("flags only duplicates, price jumps, new repeats, and trials", () => {
   assert.equal(flags.some((flag) => flag.payee === "Steady" || flag.payee === "Old twice"), false);
 });
 
+test("routine stores and chargers are not price jumps or new subscriptions", () => {
+  const rows = [
+    tx({ id: "w1", kind: "expense", amountCents: 979, category: "Other", note: "Walmart — #12", date: "2026-08-27" }),
+    tx({ id: "w2", kind: "expense", amountCents: 4741, category: "Other", note: "Walmart — #90", date: "2026-10-02" }),
+    tx({ id: "w3", kind: "expense", amountCents: 1993, category: "Other", note: "Walmart — supercenter", date: "2026-10-18" }),
+    tx({ id: "s1", kind: "expense", amountCents: 679, category: "Other", note: "Tesla Supercharger — US", date: "2026-10-20" }),
+    tx({ id: "s2", kind: "expense", amountCents: 1266, category: "Other", note: "Tesla Supercharger — US", date: "2026-10-22" }),
+    tx({ id: "d1", kind: "expense", amountCents: 450, category: "Other", note: "Dutch Bros", date: "2026-10-21" }),
+    tx({ id: "d2", kind: "expense", amountCents: 890, category: "Other", note: "Dutch Bros", date: "2026-10-23" }),
+  ];
+  const flags = chargeFlags(rows, TODAY);
+  assert.equal(flags.length, 0);
+  const google = chargeFlags(
+    [
+      tx({ id: "g1", kind: "expense", amountCents: 838, category: "Fun", note: "Google One", date: "2026-08-23" }),
+      tx({ id: "g2", kind: "expense", amountCents: 838, category: "Fun", note: "Google One", date: "2026-09-23" }),
+      tx({ id: "g3", kind: "expense", amountCents: 3198, category: "Fun", note: "Google One", date: "2026-10-23" }),
+    ],
+    TODAY,
+  );
+  assert.deepEqual(
+    google.filter((flag) => flag.kind === "price-jump").map((flag) => flag.id),
+    ["g3"],
+  );
+});
+
 test("addDays crosses month boundaries", () => {
   assert.equal(addDays("2026-10-24", 30), "2026-11-23");
 });

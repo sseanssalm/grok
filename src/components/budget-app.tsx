@@ -98,7 +98,9 @@ function entryDetail(row: Transaction): string {
 
 export function BudgetApp() {
   useEffect(() => {
-    void Promise.resolve(useBudget.persist.rehydrate());
+    void Promise.resolve(useBudget.persist.rehydrate()).then(() => {
+      useBudget.getState().applyImportedCategories();
+    });
   }, []);
 
   return <Ledger />;
@@ -112,6 +114,11 @@ function Ledger() {
   const removeTransaction = useBudget((state) => state.removeTransaction);
   const removeMonth = useBudget((state) => state.removeMonth);
   const setGoal = useBudget((state) => state.setGoal);
+  const undoCategories = useBudget((state) => state.undoCategories);
+  const undoCash = useBudget((state) => state.undoCash);
+  const undoImportedCategories = useBudget((state) => state.undoImportedCategories);
+  const dismissCategoryUndo = useBudget((state) => state.dismissCategoryUndo);
+  const undoImportedCash = useBudget((state) => state.undoImportedCash);
   const cash = useBudget((state) => state.cash);
 
   const [month, setMonth] = useState(currentMonth);
@@ -119,6 +126,7 @@ function Ledger() {
   const [formError, setFormError] = useState("");
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [entryPreference, setEntryPreference] = useState<boolean | null>(null);
   const [goalOpen, setGoalOpen] = useState(false);
   const [goalName, setGoalName] = useState(goal.name);
   const [goalAmount, setGoalAmount] = useState(centsToInput(goal.targetCents));
@@ -240,25 +248,14 @@ function Ledger() {
         }}
       />
 
-      {!viewingNow ? (
-        <div className="mb-4">
-          <Button type="button" variant="quiet" onClick={() => setMonth(currentMonth())}>
-            This month
-          </Button>
-        </div>
-      ) : (
-        <PlanPanel />
-      )}
-
-      <section className="rounded-3xl bg-surface p-6">
+      <section className="mb-4 rounded-3xl bg-surface p-6">
         <div className="grid gap-8 lg:grid-cols-2 lg:gap-12">
           <div>
             <p className="text-sm text-muted">Left to spend</p>
             <p
               aria-live="polite"
               className={cn(
-                "font-display num mt-2 leading-none tracking-tight",
-                viewingNow && cash ? "text-3xl" : "text-hero",
+                "font-display text-hero num mt-2 leading-none tracking-tight",
                 remaining < 0 ? "text-negative" : "text-fg",
               )}
             >
@@ -335,6 +332,46 @@ function Ledger() {
           </div>
         </div>
       </section>
+
+      {undoCategories && undoCategories.length > 0 ? (
+        <div className="mb-4 rounded-3xl bg-surface p-6">
+          <p className="text-sm text-muted">
+            Categorized {undoCategories.length} imported {undoCategories.length === 1 ? "row" : "rows"}.
+            Hand-entered categories were left as they were. The savings goal still uses this month's
+            income and spending.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="quiet" onClick={() => undoImportedCategories()}>
+              Undo categories
+            </Button>
+            <Button type="button" variant="quiet" onClick={() => dismissCategoryUndo()}>
+              Keep
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {undoCash ? (
+        <div className="mb-4 rounded-3xl bg-surface p-6">
+          <p className="text-sm text-muted">
+            Cash on hand is {cash ? formatMoney(cash.amountCents) : formatMoney(0)}, taken from the file
+            balance. Undo clears it.
+          </p>
+          <Button type="button" className="mt-3" variant="quiet" onClick={() => undoImportedCash()}>
+            Undo cash
+          </Button>
+        </div>
+      ) : null}
+
+      {!viewingNow ? (
+        <div className="mb-4">
+          <Button type="button" variant="quiet" onClick={() => setMonth(currentMonth())}>
+            This month
+          </Button>
+        </div>
+      ) : (
+        <PlanPanel />
+      )}
 
       <div className="mt-4 grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
         <form
@@ -437,13 +474,24 @@ function Ledger() {
           </section>
 
           <section className="rounded-3xl bg-surface p-6">
-            <div className="flex items-baseline justify-between gap-3">
-              <h2 className="text-lg font-medium">Entries</h2>
-              <p className="num text-sm text-muted">{ordered.length}</p>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-medium">Entries</h2>
+                <p className="num text-sm text-muted">{ordered.length}</p>
+              </div>
+              {ordered.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="quiet"
+                  onClick={() => setEntryPreference(!(entryPreference ?? ordered.length <= 8))}
+                >
+                  {(entryPreference ?? ordered.length <= 8) ? "Hide" : "Show"}
+                </Button>
+              ) : null}
             </div>
             {ordered.length === 0 ? (
               <p className="mt-4 text-sm text-muted">Nothing logged for {formatMonth(month)}.</p>
-            ) : (
+            ) : (entryPreference ?? ordered.length <= 8) ? (
               <ul className="mt-2 divide-y divide-border">
                 {ordered.map((row) => {
                   const title = row.note || row.category;
@@ -480,8 +528,8 @@ function Ledger() {
                   );
                 })}
               </ul>
-            )}
-            {ordered.length > 0 ? (
+            ) : null}
+            {(entryPreference ?? ordered.length <= 8) && ordered.length > 0 ? (
               <div className="mt-4 border-t border-border pt-4">
                 {confirmClear ? (
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

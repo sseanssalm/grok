@@ -32,7 +32,8 @@ test("csv maps expenses, income, transfers, and refunds", () => {
   assert.equal(byId.xm_cafe.id, "xm:xm_cafe");
   assert.equal(countsAsSpending(byId.xm_cafe.kind), true);
   assert.equal(byId.xm_pay.kind, "income");
-  assert.equal(byId.xm_pay.category, "Other");
+  assert.equal(byId.xm_pay.category, "Paycheck");
+  assert.equal(byId.xm_cafe.category, "Dining");
   assert.equal(byId.xm_pay.amountCents, 200000);
   assert.equal(byId.xm_move.kind, "transfer");
   assert.equal(byId.xm_move.direction, "out");

@@ -1,4 +1,5 @@
 import type { Bill, CashSnapshot, Kind, PaySchedule, Transaction } from "./budget.ts";
+import { isRoutineSpend, isSubscriptionName, partyKey, partyName } from "./merchants.ts";
 
 export type PayCadence = PaySchedule["cadence"];
 export type BillCadence = Bill["cadence"];
@@ -335,10 +336,10 @@ function withinFlagWindow(date: string, today: string): boolean {
 }
 
 export function chargeFlags(transactions: Transaction[], today: string): ChargeFlag[] {
-  const expenses = transactions.filter((row) => row.kind === "expense" && payeeKey(row.note));
+  const expenses = transactions.filter((row) => row.kind === "expense" && partyKey(row.note));
   const groups = new Map<string, Transaction[]>();
   for (const row of expenses) {
-    const key = payeeKey(row.note);
+    const key = partyKey(row.note);
     const list = groups.get(key) ?? [];
     list.push(row);
     groups.set(key, list);
@@ -348,7 +349,8 @@ export function chargeFlags(transactions: Transaction[], today: string): ChargeF
     const ordered = [...rows].sort(
       (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id),
     );
-    const payee = ordered[ordered.length - 1]?.note.trim() || key;
+    const payee = partyName(ordered[ordered.length - 1]?.note ?? "") || key;
+    const routine = isRoutineSpend(payee) || (amountsVary(ordered) && !isSubscriptionName(payee));
     const seen = new Set<string>();
     let duplicated = false;
     for (const row of ordered) {
@@ -383,7 +385,7 @@ export function chargeFlags(transactions: Transaction[], today: string): ChargeF
         detail: "Trial charge.",
       });
     }
-    if (!latest || !previous || !withinFlagWindow(latest.date, today)) continue;
+    if (!latest || !previous || !withinFlagWindow(latest.date, today) || routine) continue;
     const jumped =
       latest.amountCents > previous.amountCents &&
       (latest.amountCents - previous.amountCents >= 200 ||
@@ -401,7 +403,8 @@ export function chargeFlags(transactions: Transaction[], today: string): ChargeF
     }
     const close =
       Math.abs(latest.amountCents - previous.amountCents) * 100 <= previous.amountCents * 15;
-    if (ordered.length === 2 && close && !duplicated) {
+    const spaced = recurringGap(daysBetween(previous.date, latest.date));
+    if (ordered.length === 2 && close && !duplicated && spaced) {
       flags.push({
         id: latest.id,
         kind: "new-recurring",
@@ -420,4 +423,23 @@ export function chargeFlags(transactions: Transaction[], today: string): ChargeF
 
 export function countsAsSpending(kind: Kind): boolean {
   return kind === "expense";
+}
+
+function amountsVary(rows: Transaction[]): boolean {
+  if (rows.length < 3) return false;
+  const amounts = rows.map((row) => row.amountCents).sort((a, b) => a - b);
+  const mid = amounts[Math.floor(amounts.length / 2)] ?? 0;
+  const low = amounts[0] ?? 0;
+  const high = amounts[amounts.length - 1] ?? 0;
+  if (mid <= 0) return false;
+  return (high - low) * 100 > mid * 50;
+}
+
+function recurringGap(days: number): boolean {
+  return (
+    (days >= 6 && days <= 8) ||
+    (days >= 13 && days <= 16) ||
+    (days >= 27 && days <= 33) ||
+    (days >= 350 && days <= 380)
+  );
 }

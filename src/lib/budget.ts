@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { recategorizeImported } from "@/lib/merchants";
 import { XMONEY_REVISION, XMONEY_TRANSACTIONS } from "@/lib/xmoney-sync";
 
 export type Kind = "income" | "expense" | "transfer" | "refund";
@@ -30,7 +31,7 @@ export type Bill = {
   id: string;
   name: string;
   amountCents: number;
-  cadence: "weekly" | "monthly" | "yearly";
+  cadence: "weekly" | "biweekly" | "monthly" | "yearly";
   anchor: string;
 };
 
@@ -38,6 +39,10 @@ export type CashSnapshot = {
   amountCents: number;
   asOf: string;
 };
+
+export type CategoryUndo = { id: string; category: string };
+
+export type CashUndo = { previous: CashSnapshot | null };
 
 export type Goal = {
   name: string;
@@ -78,6 +83,7 @@ export const PAY_CADENCES = [
 
 export const BILL_CADENCES = [
   { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Every 2 weeks" },
   { value: "monthly", label: "Monthly" },
   { value: "yearly", label: "Yearly" },
 ] as const;
@@ -222,7 +228,10 @@ function isBill(value: unknown): value is Bill {
     Number.isInteger(bill.amountCents) &&
     bill.amountCents > 0 &&
     bill.amountCents <= 99_999_999_99 &&
-    (bill.cadence === "weekly" || bill.cadence === "monthly" || bill.cadence === "yearly") &&
+    (bill.cadence === "weekly" ||
+      bill.cadence === "biweekly" ||
+      bill.cadence === "monthly" ||
+      bill.cadence === "yearly") &&
     isISODate(bill.anchor)
   );
 }
@@ -251,6 +260,25 @@ function isCash(value: unknown): value is CashSnapshot {
     cash.amountCents <= 99_999_999_99 &&
     isISODate(cash.asOf)
   );
+}
+
+function isCategoryUndo(value: unknown): value is CategoryUndo {
+  if (!value || typeof value !== "object") return false;
+  const row = value as CategoryUndo;
+  return (
+    typeof row.id === "string" &&
+    row.id.length > 0 &&
+    row.id.length <= 160 &&
+    typeof row.category === "string" &&
+    row.category.length > 0 &&
+    row.category.length <= 40
+  );
+}
+
+function isCashUndo(value: unknown): value is CashUndo {
+  if (!value || typeof value !== "object") return false;
+  const undo = value as CashUndo;
+  return undo.previous == null || isCash(undo.previous);
 }
 
 function isGoal(value: unknown): value is Goal {
@@ -290,6 +318,16 @@ type BudgetState = {
   clearPay: () => void;
   setCash: (cash: CashSnapshot) => void;
   clearCash: () => void;
+  setCashFromImport: (cash: CashSnapshot) => void;
+  undoImportedCash: () => void;
+  applyImportedCategories: () => void;
+  undoImportedCategories: () => void;
+  dismissCategoryUndo: () => void;
+  dismissOffer: (key: string) => void;
+  undoCategories: CategoryUndo[] | null;
+  categoriesLocked: boolean;
+  dismissedOffers: string[];
+  undoCash: CashUndo | null;
   xmoneyRevision: number;
 };
 
@@ -301,6 +339,10 @@ export const useBudget = create<BudgetState>()(
       bills: [],
       pay: null,
       cash: null,
+      undoCategories: null,
+      categoriesLocked: false,
+      dismissedOffers: [],
+      undoCash: null,
       xmoneyRevision: XMONEY_REVISION,
       addTransaction: (input) =>
         set((state) => ({ transactions: [...state.transactions, { ...input, id: newId() }] })),
@@ -324,8 +366,22 @@ export const useBudget = create<BudgetState>()(
             if (row.importKey) importKeys.add(row.importKey);
             next.push(row);
           }
-          if (next.length === 0) return state;
-          return { transactions: [...state.transactions, ...next] };
+          const combined = [...state.transactions, ...next];
+          const swept = recategorizeImported(combined, state.categoriesLocked, Boolean(state.undoCategories));
+          const fresh = next
+            .filter((row) => (row.externalId || row.importKey) && row.category !== "Other")
+            .map((row) => ({ id: row.id, category: "Other" }));
+          const undo = [...(swept?.undo ?? []), ...fresh];
+          if (undo.length === 0) {
+            if (next.length === 0) return state;
+            return { transactions: swept?.transactions ?? combined };
+          }
+          const previous = state.undoCategories ?? [];
+          const seen = new Set(previous.map((row) => row.id));
+          return {
+            transactions: swept?.transactions ?? combined,
+            undoCategories: [...previous, ...undo.filter((row) => !seen.has(row.id))].slice(0, 5000),
+          };
         }),
       updateTransaction: (id, input) =>
         set((state) => ({
@@ -358,8 +414,41 @@ export const useBudget = create<BudgetState>()(
         set((state) => ({ bills: state.bills.filter((bill) => bill.id !== id) })),
       setPay: (pay) => set({ pay }),
       clearPay: () => set({ pay: null }),
-      setCash: (cash) => set({ cash }),
-      clearCash: () => set({ cash: null }),
+      setCash: (cash) => set({ cash, undoCash: null }),
+      clearCash: () => set({ cash: null, undoCash: null }),
+      setCashFromImport: (cash) =>
+        set((state) => (state.cash ? state : { cash, undoCash: { previous: null } })),
+      undoImportedCash: () =>
+        set((state) => (state.undoCash ? { cash: state.undoCash.previous, undoCash: null } : state)),
+      applyImportedCategories: () =>
+        set((state) => {
+          const swept = recategorizeImported(
+            state.transactions,
+            state.categoriesLocked,
+            Boolean(state.undoCategories),
+          );
+          if (!swept) return state;
+          return { transactions: swept.transactions, undoCategories: swept.undo };
+        }),
+      undoImportedCategories: () =>
+        set((state) => {
+          if (!state.undoCategories?.length) return state;
+          const previous = new Map(state.undoCategories.map((row) => [row.id, row.category]));
+          return {
+            transactions: state.transactions.map((row) =>
+              previous.has(row.id) ? { ...row, category: previous.get(row.id) ?? row.category } : row,
+            ),
+            undoCategories: null,
+            categoriesLocked: true,
+          };
+        }),
+      dismissCategoryUndo: () => set({ undoCategories: null }),
+      dismissOffer: (key) =>
+        set((state) =>
+          state.dismissedOffers.includes(key)
+            ? state
+            : { dismissedOffers: [...state.dismissedOffers, key].slice(-80) },
+        ),
     }),
     {
       name: "keel-budget",
@@ -371,11 +460,27 @@ export const useBudget = create<BudgetState>()(
         bills: state.bills,
         pay: state.pay,
         cash: state.cash,
+        undoCategories: state.undoCategories,
+        categoriesLocked: state.categoriesLocked,
+        dismissedOffers: state.dismissedOffers,
+        undoCash: state.undoCash,
         xmoneyRevision: state.xmoneyRevision,
       }),
       merge: (persisted, current) => {
         const saved = (persisted ?? {}) as Partial<
-          Pick<BudgetState, "transactions" | "goal" | "bills" | "pay" | "cash" | "xmoneyRevision">
+          Pick<
+            BudgetState,
+            | "transactions"
+            | "goal"
+            | "bills"
+            | "pay"
+            | "cash"
+            | "undoCategories"
+            | "categoriesLocked"
+            | "dismissedOffers"
+            | "undoCash"
+            | "xmoneyRevision"
+          >
         >;
         let transactions = current.transactions;
         if (Array.isArray(saved.transactions)) {
@@ -403,6 +508,14 @@ export const useBudget = create<BudgetState>()(
           bills,
           pay: saved.pay == null ? null : isPay(saved.pay) ? saved.pay : current.pay,
           cash: saved.cash == null ? null : isCash(saved.cash) ? saved.cash : current.cash,
+          undoCategories: Array.isArray(saved.undoCategories)
+            ? saved.undoCategories.filter(isCategoryUndo).slice(0, 5000)
+            : null,
+          categoriesLocked: saved.categoriesLocked === true,
+          dismissedOffers: Array.isArray(saved.dismissedOffers)
+            ? saved.dismissedOffers.filter((key) => typeof key === "string" && key.length > 0 && key.length <= 80).slice(0, 80)
+            : [],
+          undoCash: isCashUndo(saved.undoCash) ? saved.undoCash : null,
         };
       },
     },
